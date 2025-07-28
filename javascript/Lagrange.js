@@ -1,106 +1,85 @@
 const fs = require('fs');
 const path = require('path');
 
-// Convert base string to decimal (as BigInt)
+// Convert a number string in any base (up to base-36) to a BigInt
 function toDecimal(str, base) {
   const digits = '0123456789abcdefghijklmnopqrstuvwxyz';
   str = str.toLowerCase();
-  let num = BigInt(0);
-  for (let i = 0; i < str.length; i++) {
-    num = num * BigInt(base) + BigInt(digits.indexOf(str[i]));
-  }
-  return num;
-}
+  let result = 0n;
 
-// Extended Euclidean Algorithm to find modular inverse
-function modInverse(a, mod) {
-  let m0 = mod, t, q;
-  let x0 = BigInt(0), x1 = BigInt(1);
-
-  if (mod === BigInt(1)) return BigInt(0);
-
-  while (a > BigInt(1)) {
-    q = a / mod;
-    t = mod;
-
-    mod = a % mod;
-    a = t;
-    t = x0;
-
-    x0 = x1 - q * x0;
-    x1 = t;
+  for (let char of str) {
+    const digit = BigInt(digits.indexOf(char));
+    result = result * BigInt(base) + digit;
   }
 
-  if (x1 < BigInt(0)) x1 += m0;
-
-  return x1;
+  return result;
 }
 
-// Modular Lagrange Interpolation to find f(0)
-function lagrangeInterpolation(shares, primeModulus) {
-  let secret = BigInt(0);
+// Perform Lagrange Interpolation at x = 0 to find the secret
+function lagrangeInterpolation(shares) {
+  let secret = 0n;
   const k = shares.length;
 
   for (let i = 0; i < k; i++) {
-    let xi = shares[i].x;
+    let xi = BigInt(shares[i].x);
     let yi = shares[i].y;
 
-    let numerator = BigInt(1);
-    let denominator = BigInt(1);
+    let numerator = 1n;
+    let denominator = 1n;
 
     for (let j = 0; j < k; j++) {
-      if (i !== j) {
-        let xj = shares[j].x;
-        numerator = (numerator * (-xj + primeModulus)) % primeModulus;
-        denominator = (denominator * (xi - xj + primeModulus)) % primeModulus;
-      }
+      if (i === j) continue;
+
+      let xj = BigInt(shares[j].x);
+      numerator *= -xj;
+      denominator *= (xi - xj);
     }
 
-    const inv = modInverse(denominator, primeModulus);
-    const term = (yi * numerator * inv) % primeModulus;
-    secret = (secret + term) % primeModulus;
+    // Compute modular inverse if needed, but here we assume integers are safe
+    const term = yi * numerator / denominator;
+    secret += term;
   }
 
   return secret;
 }
 
-// Process a single test case file
-function processFile(filePath, primeModulus) {
+// Process a single JSON test file
+function processTestFile(filePath) {
   const rawData = fs.readFileSync(filePath);
-  const json = JSON.parse(rawData);
+  const data = JSON.parse(rawData);
 
-  const { k } = json.keys;
+  const { k } = data.keys;
 
-  const shares = Object.keys(json)
-    .filter(key => key !== 'keys')
-    .map(key => ({
-      x: BigInt(parseInt(key)),
-      y: toDecimal(json[key].value, parseInt(json[key].base))
+  // Extract and decode the shares
+  const shares = Object.entries(data)
+    .filter(([key]) => key !== 'keys')
+    .map(([x, { base, value }]) => ({
+      x: parseInt(x),
+      y: toDecimal(value, parseInt(base))
     }))
-    .sort((a, b) => Number(a.x - b.x))
-    .slice(0, k);
+    .sort((a, b) => a.x - b.x)
+    .slice(0, k); // Use first k shares
 
-  const secret = lagrangeInterpolation(shares, primeModulus);
+  // Reconstruct the secret using Lagrange Interpolation
+  const secret = lagrangeInterpolation(shares);
+
   console.log(`✅ ${path.basename(filePath)} ➜ Secret: ${secret.toString()}`);
 }
 
-// Process all JSON files in a directory
-function processAllTestcases(folderPath, primeModulus) {
+// Process all test case files in a directory
+function processAllFiles(folderPath) {
   const files = fs.readdirSync(folderPath).filter(file => file.endsWith('.json'));
+
   for (const file of files) {
     try {
-      processFile(path.join(folderPath, file), primeModulus);
+      const filePath = path.join(folderPath, file);
+      processTestFile(filePath);
     } catch (err) {
-      console.error(`❌ Failed: ${file} - ${err.message}`);
+      console.error(`❌ ${file} ➜ Error: ${err.message}`);
     }
   }
 }
 
-// === Run ===
-const folderPath = path.join(__dirname, '../testcases');
-
-// ⚠️ Choose a safe large prime modulus ( > all possible secrets and shares )
-// Example 2^127 - 1 (a Mersenne prime), or customize accordingly
-const PRIME_MODULUS = BigInt('170141183460469231731687303715884105727');
-
-processAllTestcases(folderPath, PRIME_MODULUS);
+// Run from directory: /path/to/testcases
+const testcasesFolder = path.join(__dirname, '../testcases');
+processAllFiles(testcasesFolder);
